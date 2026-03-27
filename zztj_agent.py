@@ -1167,6 +1167,10 @@ def build_index():
 # ─── 语义检索 ─────────────────────────────────────────────────────────
 def retrieve(query: str, top_k: int = TOP_K):
     """混合检索：加权关键词召回 + 语义召回 + 片段重排。"""
+    query = _normalize_text(query)
+    if not query:
+        return []
+
     embedder = get_embedder()
     get_chroma_collection()
     query_features = _extract_query_features(query)

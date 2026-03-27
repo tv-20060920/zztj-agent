@@ -12,6 +12,7 @@ from zztj_agent import (
     _extract_query_features,
     _limit_rerank_candidates,
     _prepare_retrieval_text,
+    retrieve,
     _select_keyword_candidates,
     _score_keyword_candidate,
     _score_text_window,
@@ -189,6 +190,47 @@ def test_limit_rerank_candidates_keeps_strongest_seed_scores():
     )
 
     assert [item["id"] for item in limited] == ["anchor", "balanced"]
+
+
+def test_retrieve_normalizes_whitespace_before_embedding():
+    import zztj_agent as agent
+
+    class FakeEmbedder:
+        def __init__(self):
+            self.queries = []
+
+        def encode(self, items, convert_to_numpy=True):
+            import numpy as np
+
+            self.queries.extend(items)
+            return np.array([[0.0, 0.0, 0.0]])
+
+    fake_embedder = FakeEmbedder()
+    original_get_embedder = agent.get_embedder
+    original_get_collection = agent.get_chroma_collection
+    original_get_corpus_entries = agent._get_corpus_entries
+    original_call_collection = agent._call_collection
+
+    try:
+        agent.get_embedder = lambda: fake_embedder
+        agent.get_chroma_collection = lambda: object()
+        agent._get_corpus_entries = lambda: []
+        agent._call_collection = lambda method_name, *args, **kwargs: {
+            "documents": [[]],
+            "metadatas": [[]],
+            "distances": [[]],
+            "ids": [[]],
+        }
+
+        results = retrieve("二十八年\n始皇东行郡、县，  上邹峄山。", top_k=1)
+
+        assert results == []
+        assert fake_embedder.queries == ["二十八年始皇东行郡、县，上邹峄山。"]
+    finally:
+        agent.get_embedder = original_get_embedder
+        agent.get_chroma_collection = original_get_collection
+        agent._get_corpus_entries = original_get_corpus_entries
+        agent._call_collection = original_call_collection
 
 
 def test_select_best_candidates_per_file_prefers_rule_stronger_chunk():
