@@ -1,0 +1,24 @@
+.DS_Store
+CACHEDIR.TAG
+__pycache__/
+.pytest_cache/
+
+# Local Python environments
+venv/
+.venv/
+bin/
+include/
+lib/
+share/
+pyvenv.cfg
+.lock
+
+# Runtime output
+app.log
+download.log
+index_storage/
+memory/
+
+# Local editor files
+.idea/
+.vscode/

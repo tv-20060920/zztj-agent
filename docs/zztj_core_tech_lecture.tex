@@ -1,0 +1,825 @@
+\documentclass[12pt,a4paper]{ctexart}
+
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,longtable,array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{fancyvrb}
+\usepackage{titlesec}
+\usepackage{setspace}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black
+}
+
+\setstretch{1.2}
+\setlist[itemize]{leftmargin=2em}
+\setlist[enumerate]{leftmargin=2.2em}
+\titleformat{\section}{\large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.6em}{}
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\term}[1]{\textbf{#1}}
+
+\title{《资治通鉴·周纪》智能比对 Agent\\关键核心技术讲义稿}
+\author{面向大一新生的从零讲解版}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{这份讲义讲什么}
+
+这份讲义基于项目源码写成，目标不是只告诉你“它用了哪些库”，而是让你真正明白这个项目为什么能工作、每一步在解决什么问题、不同技术之间是怎样接起来的。
+
+这个项目本质上是一个\term{本地运行的中文古籍 RAG 系统}，但它并不只是“检索再问大模型”。它把任务拆成了四件事：
+
+\begin{enumerate}
+  \item 把史料文本准备干净；
+  \item 把史料切成适合检索的小块并建立向量索引；
+  \item 先检索最相关的原始史料，再精细重排；
+  \item 把“原始史料”和“《资治通鉴》改写文本”做差异比对，并交给本地 LLM 解释改写意图。
+\end{enumerate}
+
+如果你只记一句话，可以记成：
+
+\begin{center}
+\fbox{\parbox{0.9\linewidth}{
+输入《资治通鉴》一段文字 $\rightarrow$ 检索可能对应的史料 $\rightarrow$ 比较哪里删了、哪里改了、哪里加了 $\rightarrow$ 让本地大模型给出解释。
+}}
+\end{center}
+
+\section{先把问题讲明白}
+
+\subsection{这个项目要解决什么问题}
+
+很多同学第一次看到“大模型项目”，会以为核心是“问模型一个问题”。其实不是。
+
+这个项目的真正目标是：
+
+\begin{quote}
+给定《资治通鉴·周纪》中的一段文本，自动去原始典籍中找到最可能的来源片段，然后分析司马光是如何改写原文的。
+\end{quote}
+
+这里至少有三个难点：
+
+\begin{enumerate}
+  \item \term{史料很多}：原始来源可能来自《左传》《国语》《史记》《战国策》等不同文本。
+  \item \term{措辞不完全一样}：司马光会删、改、并、缩，不能只靠字符串完全匹配。
+  \item \term{输出不能只是“找到像的文本”}：还要解释“为什么这样改写”。
+\end{enumerate}
+
+所以，这不是普通搜索，也不是单纯聊天，而是一个“\term{检索 + 比对 + 解释}”的复合任务。
+
+\subsection{为什么不能只用关键词搜索}
+
+如果只靠关键词搜索，会遇到几个问题：
+
+\begin{itemize}
+  \item 古文存在繁简差异，比如“显王/顯王”“颜率/顏率”；
+  \item 同一事件会有不同表述，比如“兴师临周”和“發兵至周”；
+  \item 一段长史料里只有中间几句真正相关，整段拿来会很吵。
+\end{itemize}
+
+所以项目没有只做关键词搜索，而是用了\term{混合检索}：
+
+\begin{itemize}
+  \item 一部分靠实体词和事件词做“硬匹配”；
+  \item 一部分靠向量相似度做“语义匹配”；
+  \item 最后再对局部片段做精细重排。
+\end{itemize}
+
+\section{系统总架构}
+
+项目入口主要在两个文件中：
+
+\begin{itemize}
+  \item \code{zztj_agent.py}：核心逻辑；
+  \item \code{app.py}：Gradio Web 界面。
+\end{itemize}
+
+系统主流程可以概括为：
+
+\begin{Verbatim}[fontsize=\small]
+用户输入《资治通鉴》文本
+        |
+        v
+剥离按语（如“臣光曰”）
+        |
+        v
+检查本地向量索引是否已存在
+        |
+        +-- 不存在 -> 读取 sources/ -> 清洗 -> 分块 -> 向量化 -> 写入 ChromaDB
+        |
+        v
+对输入文本做特征提取
+        |
+        v
+混合检索：关键词召回 + 向量召回
+        |
+        v
+片段级重排，选出最相关史料
+        |
+        v
+Diff 对比：显示删减/新增/改写
+        |
+        v
+调用本地 LLM 解释改写意图
+        |
+        v
+Gradio 页面展示报告
+\end{Verbatim}
+
+源码里把这个总流程落实成了一个主函数：
+
+\begin{center}
+\code{analyze_zztj_text(input_text)}
+\end{center}
+
+这也是整个项目最值得读懂的函数，因为它把索引、检索、Diff、LLM 全串起来了。
+
+\section{核心技术一：文本数据准备}
+
+\subsection{为什么数据准备是第一技术}
+
+很多初学者觉得“模型最重要”。但这个项目最先决定效果上限的，其实是\term{数据准备}。
+
+因为如果原始史料里有大量导航栏、编辑标记、百科说明、乱码，那么：
+
+\begin{itemize}
+  \item 分块会乱；
+  \item 向量会脏；
+  \item 检索会偏；
+  \item Diff 会失真；
+  \item LLM 的解释也会跟着跑偏。
+\end{itemize}
+
+\subsection{项目如何下载和清洗古籍}
+
+\code{download_classics.py} 负责批量下载古籍文本。它做了两件事：
+
+\begin{enumerate}
+  \item 用 \code{curl} 从 Wikisource 拉取网页；
+  \item 从 HTML 中提取正文，并去掉页面噪音。
+\end{enumerate}
+
+其中，\code{clean_extracted_text()} 和 \code{_clean_source_text()} 都体现了一个关键思想：
+
+\begin{quote}
+先把“给人看的网页”还原成“给机器处理的纯文本”。
+\end{quote}
+
+它们会去掉的内容包括：
+
+\begin{itemize}
+  \item 返回目录、姊妹计划、百科条目等导航信息；
+  \item “编辑”标记；
+  \item 某些括注和说明文字；
+  \item 多余空白、换行和页面噪音。
+\end{itemize}
+
+\subsection{为什么这一步属于“核心技术”}
+
+因为 RAG 不是魔法，它非常依赖输入质量。你可以把它理解成：
+
+\[
+\text{最终效果} \approx \text{数据质量} \times \text{检索质量} \times \text{生成质量}
+\]
+
+其中任何一项接近零，整体效果都会很差。
+
+\section{核心技术二：古文友好的文本预处理}
+
+\subsection{按语剥离}
+
+《资治通鉴》中有时会出现“臣光曰”“臣光按”这样的编者按语。项目在检索前会先调用：
+
+\begin{center}
+\code{_prepare_retrieval_text(input_text)}
+\end{center}
+
+它的作用是：
+
+\begin{itemize}
+  \item 如果检测到按语，就把正文和按语分开；
+  \item 检索时只用正文，不让按语污染查询；
+  \item 报告里再提示“已自动忽略按语”。
+\end{itemize}
+
+这件事很重要，因为按语往往是司马光的评论，不一定属于原始史料本身。
+
+\subsection{繁简转换}
+
+项目考虑了“显/顯”“颜/顏”“赵/趙”这类问题。它优先用 \code{OpenCC} 做繁简转换；如果本机没有这个库，就退化为一个手工映射表。
+
+这背后体现了两个工程思想：
+
+\begin{enumerate}
+  \item \term{算法上容错}：同一实体的不同字形应该视为同一对象；
+  \item \term{工程上降级}：可选依赖缺失时，程序仍尽量可运行。
+\end{enumerate}
+
+\subsection{句子切分}
+
+项目没有按英文那种空格分词，而是按古文常见句读来切。可理解为分隔符集合：
+
+\begin{center}
+\code{。 ！ ？ ； \textbackslash n}
+\end{center}
+
+对应函数是：
+
+\begin{center}
+\code{_split_text_sentences(text)}
+\end{center}
+
+这是因为古文检索里，\term{句子}通常比“固定字数”更接近语义单位。
+
+\section{核心技术三：分块 Chunking}
+
+\subsection{为什么要分块}
+
+向量数据库不是直接存整部《史记》，而是存很多个较短文本块。原因有三：
+
+\begin{enumerate}
+  \item 一整卷文本太长，向量会把很多无关信息揉在一起；
+  \item 查询时真正相关的往往只是其中一小段；
+  \item Diff 比对也更适合和短片段进行。
+\end{enumerate}
+
+\subsection{项目里的分块策略}
+
+项目参数写得很明确：
+
+\begin{itemize}
+  \item \code{CHUNK\_SIZE = 280}
+  \item \code{CHUNK\_OVERLAP = 70}
+\end{itemize}
+
+分块函数是：
+
+\begin{center}
+\code{chunk_text(text, chunk_size=280, overlap=70)}
+\end{center}
+
+它不是简单“每 280 个字切一刀”，而是：
+
+\begin{enumerate}
+  \item 先清洗文本；
+  \item 再按段落切；
+  \item 段内再按句子切；
+  \item 如果句子太长，再做滑动窗口切分；
+  \item 块和块之间保留重叠，避免上下文丢失。
+\end{enumerate}
+
+\subsection{为什么要 overlap}
+
+假设一个事件刚好跨在两个块的边界上，如果没有重叠，模型可能在两个块里都只看到“半个事件”，导致检索失败。
+
+所以 overlap 的作用可以理解成：
+
+\begin{quote}
+让相邻文本块共享一部分上下文，降低“切断语义”的风险。
+\end{quote}
+
+\subsection{一个可以记住的经验}
+
+文本分块没有绝对标准，但常见原则是：
+
+\begin{itemize}
+  \item 太大：噪音多；
+  \item 太小：上下文不够；
+  \item 有重叠：通常比完全不重叠更稳。
+\end{itemize}
+
+\section{核心技术四：向量化与本地向量数据库}
+
+\subsection{什么是向量化}
+
+“向量化”就是把一段文本变成一个数字数组。项目里使用的是中文嵌入模型：
+
+\begin{center}
+\code{shibing624/text2vec-base-chinese}
+\end{center}
+
+在报告中，它也被标注为 768 维向量模型。
+
+你可以把向量理解成“文本在数学空间中的坐标”。相似的句子，坐标会更接近。
+
+\subsection{Embedding 模型在项目中怎么用}
+
+对应函数是：
+
+\begin{center}
+\code{get_embedder()}
+\end{center}
+
+它采用了\term{懒加载}：
+
+\begin{itemize}
+  \item 第一次用到时才加载模型；
+  \item 避免程序一启动就占很多内存。
+\end{itemize}
+
+同时还有：
+
+\begin{center}
+\code{free_embedder()}
+\end{center}
+
+用于释放内存。这说明作者已经考虑到本地机器资源有限的问题。
+
+\subsection{向量数据库为什么选 ChromaDB}
+
+项目选择的是本地持久化向量库 \code{ChromaDB}。好处是：
+
+\begin{itemize}
+  \item 不需要单独部署服务器；
+  \item 可以直接保存在本地目录 \code{index\_storage/}；
+  \item 适合个人电脑、本地实验和课程项目。
+\end{itemize}
+
+集合初始化函数是：
+
+\begin{center}
+\code{get_chroma_collection()}
+\end{center}
+
+这里还设置了：
+
+\begin{center}
+\code{metadata=\{"hnsw:space": "cosine"\}}
+\end{center}
+
+意思是向量相似度主要按\term{余弦相似度}来理解：
+
+\[
+\cos(\theta)=\frac{\mathbf{q}\cdot \mathbf{d}}{\|\mathbf{q}\|\|\mathbf{d}\|}
+\]
+
+其中 $\mathbf{q}$ 是查询向量，$\mathbf{d}$ 是文档向量。两个向量方向越接近，值越大，语义越相似。
+
+\subsection{索引建立的流程}
+
+\code{build_index()} 的逻辑可以概括成：
+
+\begin{enumerate}
+  \item 如果索引已有内容，就直接复用；
+  \item 如果没有，就从 \code{sources/} 读取所有 \code{.txt}；
+  \item 每个文件分块；
+  \item 每个块做 embedding；
+  \item 把向量、文本、元数据一起写进 ChromaDB。
+\end{enumerate}
+
+这里的元数据包括：
+
+\begin{itemize}
+  \item \code{title}：文献标题；
+  \item \code{file}：来源文件名。
+\end{itemize}
+
+这让后续报告可以告诉用户“这段文本来自哪一部书”。
+
+\section{核心技术五：混合检索与重排}
+
+\subsection{为什么不是只做向量检索}
+
+如果只做向量检索，模型可能把“语义很像但人物年份不对”的段落也召回出来。
+
+比如：
+
+\begin{itemize}
+  \item 都讲“诸侯”“出兵”“周室危机”；
+  \item 但不是同一位王、不是同一年、不是同一个人物。
+\end{itemize}
+
+对历史文本来说，这种错配非常致命。
+
+\subsection{项目做了哪三层检索}
+
+函数 \code{retrieve(query, top\_k=3)} 是全项目最关键的技术之一，它实际上做了三层事：
+
+\begin{enumerate}
+  \item \term{实体与事件驱动的关键词召回}
+  \item \term{向量语义召回}
+  \item \term{局部片段级重排}
+\end{enumerate}
+
+\subsection{第一层：特征提取}
+
+项目会先从查询中抽出一组“检索锚点”。这一步由 \code{_extract_query_features(query)} 完成。
+
+它抽取的对象包括：
+
+\begin{itemize}
+  \item rulers：君主称号，如“顯王”；
+  \item years：年份，如“三十三年”；
+  \item names：人名，如“顏率”；
+  \item states：国家名，如“秦”“周”“齊”；
+  \item events：事件词，如“九鼎”“為諸侯”；
+  \item phrases：较长短语；
+  \item bigrams：二元字串集合，用于估计局部重合度。
+\end{itemize}
+
+这一步非常像“把一句话压缩成检索用的结构化线索”。
+
+\subsection{第二层：关键词加权打分}
+
+函数 \code{_score_keyword_candidate()} 不是简单数词频，而是给不同实体不同权重。
+
+例如源码中，权重大致是：
+
+\begin{itemize}
+  \item ruler：3.6
+  \item year：3.0
+  \item name：2.8
+  \item phrase：1.8
+  \item event：0.8
+\end{itemize}
+
+这说明项目认为：
+
+\begin{quote}
+在历史文本检索里，“是谁、哪一年”通常比“有没有泛泛的战争词”更重要。
+\end{quote}
+
+\subsection{第三层：语义召回}
+
+项目把查询转成向量后，会去 ChromaDB 里找最相近的若干候选块。代码中：
+
+\begin{itemize}
+  \item \code{TOP\_K = 3}
+  \item \code{SEMANTIC\_CANDIDATES = 12}
+\end{itemize}
+
+也就是说，它不是只取最终 3 条，而是先多拿一些候选，再做后续筛选。
+
+\subsection{第四层：局部片段抽取}
+
+一个向量块可能仍然偏长，所以项目还会调用：
+
+\begin{center}
+\code{_extract_best_snippet(doc_text, query, query_features)}
+\end{center}
+
+它会在候选文档内部滑动窗口，找到最像查询的那一小段。
+
+为什么这一步重要？因为用户真正要看的是：
+
+\begin{quote}
+最能说明问题的证据片段，而不是一大段长文。
+\end{quote}
+
+\subsection{第五层：窗口评分与惩罚机制}
+
+\code{_score_text_window()} 会综合多个因素打分：
+
+\begin{itemize}
+  \item coverage：重要实体命中的覆盖率；
+  \item ngram overlap：字串重合度；
+  \item sequence ratio：序列相似度；
+  \item bonus：关键实体命中后的加分；
+  \item penalty：人物、年份、国别不一致时的惩罚。
+\end{itemize}
+
+源码里的公式近似可以写成：
+
+\[
+\text{window\_score}
+= 0.58 \cdot \text{coverage}
+ 0.24 \cdot \text{ngram}
+ 0.18 \cdot \text{sequence}
+ \text{bonus}
+- \text{penalty}
+\]
+
+最终重排分数近似为：
+
+\[
+\text{final\_score}
+= 0.28 \cdot \text{semantic}
+ 0.27 \cdot \text{keyword}
+ 0.45 \cdot \text{window}
+- 0.05 \cdot \text{penalty}
+\]
+
+这说明项目的思想很明确：
+
+\begin{quote}
+真正决定名次的，不是“整段文档看起来像不像”，而是“文档里最关键的局部片段到底像不像”。
+\end{quote}
+
+\subsection{这一步教会我们什么}
+
+这一步是整份项目中最像“算法设计”的部分。它说明：
+
+\begin{itemize}
+  \item 检索系统不一定追求最复杂模型；
+  \item 只要特征设计合理、重排逻辑清楚，也能做出很强的效果；
+  \item 面向具体任务，规则和向量往往不是对立关系，而是互补关系。
+\end{itemize}
+
+\section{核心技术六：Diff 差异比对}
+
+\subsection{为什么要做 Diff}
+
+检索找到来源后，用户接下来最关心的不是“像不像”，而是：
+
+\begin{quote}
+司马光到底改了什么？
+\end{quote}
+
+所以项目没有停在检索，而是继续调用：
+
+\begin{center}
+\code{compute_diff(source_text, target_text, source_name)}
+\end{center}
+
+\subsection{技术原理是什么}
+
+这里使用的是 Python 标准库 \code{difflib}，本质上是比较两个序列之间的差异。
+
+项目先把文本切成句子，再调用 \code{unified\_diff}。于是它得到的不是逐字乱比，而是更接近“句子层面的增删改”。
+
+\subsection{为什么输出成 HTML}
+
+因为前端用的是 Gradio，而 Gradio 的 Markdown/HTML 展示很方便。项目把差异包装成：
+
+\begin{itemize}
+  \item 绿色：新增；
+  \item 红色删除线：删减；
+  \item 灰色：上下文。
+\end{itemize}
+
+这让一个本来偏算法的结果，变成了用户一眼就能读懂的可视化结果。
+
+\section{核心技术七：本地 LLM 解释层}
+
+\subsection{为什么检索之后还要 LLM}
+
+检索和 Diff 能告诉你“发生了什么变化”，但不擅长直接回答：
+
+\begin{itemize}
+  \item 这种变化可能意味着什么？
+  \item 它反映了怎样的编纂取向？
+  \item 它和北宋政治语境可能有什么关系？
+\end{itemize}
+
+这些问题需要\term{解释能力}，所以项目引入了本地大模型。
+
+\subsection{项目如何调用大模型}
+
+函数是：
+
+\begin{center}
+\code{call_llm(prompt, timeout=120)}
+\end{center}
+
+它并没有依赖复杂框架，而是直接通过 HTTP 调用本地 Ollama 服务：
+
+\begin{center}
+\code{http://127.0.0.1:11434/api/generate}
+\end{center}
+
+模型名配置为：
+
+\begin{center}
+\code{qwen2.5:3b}
+\end{center}
+
+这说明项目走的是\term{轻量本地化路线}：不用云 API，不上传数据，适合个人电脑运行。
+
+\subsection{Prompt 设计有什么特点}
+
+项目不是一句“帮我分析一下”，而是给了明确结构：
+
+\begin{enumerate}
+  \item 删减内容；
+  \item 新增/改写内容；
+  \item 语言风格变化；
+  \item 整体改写意图；
+  \item 一句话总结。
+\end{enumerate}
+
+这说明一个重要事实：
+
+\begin{quote}
+大模型输出质量，不只取决于模型大小，也取决于你把任务拆得是否清楚。
+\end{quote}
+
+\subsection{为什么强调“本地”}
+
+本地 LLM 的价值在这个项目里至少有三点：
+
+\begin{itemize}
+  \item 隐私更好，文本不出本机；
+  \item 适合离线场景；
+  \item 对课程展示来说，系统更完整，依赖更少。
+\end{itemize}
+
+\section{核心技术八：Web 前端与交互封装}
+
+\subsection{为什么还需要 Gradio}
+
+如果只有命令行，技术同学能用，但普通同学、老师、演示场景就不方便。
+
+因此项目在 \code{app.py} 中用 Gradio 做了一个 Web UI。它提供了：
+
+\begin{itemize}
+  \item 文本输入框；
+  \item 示例输入；
+  \item “开始分析”按钮；
+  \item 分析报告展示区。
+\end{itemize}
+
+\subsection{这不是“花哨界面”，而是产品化}
+
+这一层的意义是把算法变成可使用的工具。
+
+从工程角度看，它完成了三件事：
+
+\begin{enumerate}
+  \item 统一输入输出；
+  \item 让用户不必理解命令行；
+  \item 把复杂流程封装成“一次点击”。
+\end{enumerate}
+
+\subsection{一个值得注意的工程细节}
+
+\code{app.py} 里专门改写了部分 \code{httpx} 请求逻辑，对 \code{localhost} 和 \code{127.0.0.1} 禁用代理。
+
+这说明作者遇到过真实环境问题：有些系统代理会误伤本地回环请求，导致 Gradio 启动失败或自检异常。
+
+也就是说，\term{核心技术不只在算法里，也在这些“程序真正跑起来”的细节里。}
+
+\section{核心技术九：鲁棒性与工程质量}
+
+\subsection{懒加载与资源控制}
+
+项目不是一上来就把所有模型都塞进内存，而是按需加载 embedding 模型，这对于普通笔记本非常重要。
+
+\subsection{持久化索引}
+
+索引一旦建好，不需要每次重建。这样启动速度更快，也更接近真实系统。
+
+\subsection{错误恢复}
+
+\code{_call_collection()} 和 \code{_collection_count()} 体现了一个工程细节：如果 Chroma collection 句柄失效，就自动重连一次。
+
+这说明作者考虑的不是“代码理想情况下能跑”，而是“偶发故障时能不能恢复”。
+
+\subsection{测试}
+
+项目有一组测试文件 \code{tests/test_retrieval_helpers.py}。它重点测试了：
+
+\begin{itemize}
+  \item 按语剥离；
+  \item 繁简混合查询；
+  \item 关键词打分是否偏向真正的实体；
+  \item 局部片段抽取是否足够紧凑；
+  \item 文本清洗是否能去掉 Wikisource 噪音；
+  \item collection 丢失后的恢复。
+\end{itemize}
+
+这很值得初学者学习，因为测试不只是“保证没报错”，更是把关键设计意图固定下来。
+
+\section{从头到尾走一遍完整样例}
+
+\subsection{样例输入}
+
+\begin{quote}
+威烈王二十三年，初命晉大夫魏斯、趙籍、韓虔為諸侯。
+\end{quote}
+
+\subsection{系统内部会发生什么}
+
+\begin{enumerate}
+  \item 先检查输入够不够长；
+  \item 如果有“臣光曰”之类的按语，就先剥离；
+  \item 查看本地索引是否存在；
+  \item 抽取查询锚点，如“威烈王”“二十三年”“魏斯”“趙籍”“韓虔”“為諸侯”；
+  \item 先从所有史料块中做关键词召回；
+  \item 再做向量相似度召回；
+  \item 在候选文档内部截取最相关的小片段；
+  \item 输出 Top-K 结果；
+  \item 对每条结果做 Diff；
+  \item 把“原史料 + 通鉴文本”一起喂给本地 LLM；
+  \item 生成最终 Markdown 报告。
+\end{enumerate}
+
+\subsection{这一步最想让你看懂什么}
+
+不是“函数很多”，而是：
+
+\begin{quote}
+每个函数都只负责解决链条中的一个具体问题，最后再由主函数把它们串起来。
+\end{quote}
+
+这就是软件工程中常说的\term{模块化}。
+
+\section{这套技术方案为什么成立}
+
+\subsection{它抓住了任务本质}
+
+这个项目之所以合理，是因为它没有把“古籍分析”误当成一个纯聊天问题，而是识别出这个任务真正依赖三种能力：
+
+\begin{enumerate}
+  \item 找到史料；
+  \item 对齐文本；
+  \item 解释差异。
+\end{enumerate}
+
+\subsection{它没有迷信大模型}
+
+项目里最重的“智能”并不全在 LLM 上。很多决定效果的关键步骤都是传统工程方法：
+
+\begin{itemize}
+  \item 清洗；
+  \item 分块；
+  \item 特征抽取；
+  \item 规则加权；
+  \item 重排；
+  \item Diff。
+\end{itemize}
+
+LLM 主要负责最后的高层解释，而不是包办一切。
+
+\subsection{它适合教学}
+
+这个项目特别适合作为新生入门案例，因为它把很多现代 AI 系统里的关键概念都串起来了：
+
+\begin{itemize}
+  \item 文本处理；
+  \item 信息检索；
+  \item 向量表示；
+  \item 数据库；
+  \item Web 应用；
+  \item Prompt 设计；
+  \item 软件工程。
+\end{itemize}
+
+\section{局限与改进方向}
+
+一份好的讲义不能只讲优点，也要讲边界。
+
+目前这个项目的局限主要有：
+
+\begin{enumerate}
+  \item 史料覆盖范围仍可能不完整；
+  \item 规则抽取对个别古文句式可能失效；
+  \item 向量模型是通用中文模型，不一定最懂先秦古文；
+  \item LLM 的历史解释仍然可能出现过度推断；
+  \item Diff 主要反映文本层面的改动，不等于严格的文献学考证。
+\end{enumerate}
+
+可以继续优化的方向包括：
+
+\begin{itemize}
+  \item 引入更完整的《左传》《国语》《通鉴考异》；
+  \item 训练或替换更适合古汉语的 embedding 模型；
+  \item 做人物、年代、地名的专门知识库；
+  \item 加入时间线可视化；
+  \item 让结果支持导出 PDF 或学术报告格式。
+\end{itemize}
+
+\section{给大一新生的最终总结}
+
+如果你以前没有接触过 AI 系统，请记住下面五句话：
+
+\begin{enumerate}
+  \item 这个项目不是“直接问大模型”，而是“先检索、再比对、后解释”。
+  \item RAG 的核心不只是向量数据库，更是数据清洗、分块和重排。
+  \item 向量相似度能帮你找“意思接近”的文本，但历史任务还需要实体约束。
+  \item Diff 把“模型觉得像”变成“人眼能看懂哪里改了”。
+  \item 一个真正可用的 AI 项目，算法、工程、界面和测试同样重要。
+\end{enumerate}
+
+如果把这套系统再压缩成一行，可以写成：
+
+\begin{center}
+\fbox{\parbox{0.92\linewidth}{
+古籍智能比对 Agent = 干净史料数据 + 古文友好的分块方式 + 混合检索与重排 + 文本差异可视化 + 本地大模型解释。
+}}
+\end{center}
+
+\section*{附：建议课堂讲法}
+
+如果你要拿这份讲义给大一学生上课，可以按下面顺序讲：
+
+\begin{enumerate}
+  \item 先讲“这个系统想解决什么历史学问题”；
+  \item 再讲“为什么不能只用关键词搜索”；
+  \item 再讲“什么叫向量、什么叫 RAG”；
+  \item 然后走一遍项目主流程；
+  \item 最后拿一个真实例子现场演示。
+\end{enumerate}
+
+这样学生不会先被术语淹没，而是先理解问题，再理解技术。
+
+\end{document}

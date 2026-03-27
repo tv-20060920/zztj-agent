@@ -1,0 +1,60 @@
+\contentsline {section}{\numberline {1}这份讲义讲什么}{4}{section.1}%
+\contentsline {section}{\numberline {2}先把问题讲明白}{4}{section.2}%
+\contentsline {subsection}{\numberline {2.1}这个项目要解决什么问题}{4}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}为什么不能只用关键词搜索}{5}{subsection.2.2}%
+\contentsline {section}{\numberline {3}系统总架构}{5}{section.3}%
+\contentsline {section}{\numberline {4}核心技术一：文本数据准备}{6}{section.4}%
+\contentsline {subsection}{\numberline {4.1}为什么数据准备是第一技术}{6}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}项目如何下载和清洗古籍}{6}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}为什么这一步属于“核心技术”}{7}{subsection.4.3}%
+\contentsline {section}{\numberline {5}核心技术二：古文友好的文本预处理}{7}{section.5}%
+\contentsline {subsection}{\numberline {5.1}按语剥离}{7}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}繁简转换}{7}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}句子切分}{7}{subsection.5.3}%
+\contentsline {section}{\numberline {6}核心技术三：分块 Chunking}{8}{section.6}%
+\contentsline {subsection}{\numberline {6.1}为什么要分块}{8}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}项目里的分块策略}{8}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}为什么要 overlap}{8}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}一个可以记住的经验}{8}{subsection.6.4}%
+\contentsline {section}{\numberline {7}核心技术四：向量化与本地向量数据库}{9}{section.7}%
+\contentsline {subsection}{\numberline {7.1}什么是向量化}{9}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Embedding 模型在项目中怎么用}{9}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}向量数据库为什么选 ChromaDB}{9}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}索引建立的流程}{10}{subsection.7.4}%
+\contentsline {section}{\numberline {8}核心技术五：混合检索与重排}{10}{section.8}%
+\contentsline {subsection}{\numberline {8.1}为什么不是只做向量检索}{10}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}项目做了哪三层检索}{10}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}第一层：特征提取}{11}{subsection.8.3}%
+\contentsline {subsection}{\numberline {8.4}第二层：关键词加权打分}{11}{subsection.8.4}%
+\contentsline {subsection}{\numberline {8.5}第三层：语义召回}{11}{subsection.8.5}%
+\contentsline {subsection}{\numberline {8.6}第四层：局部片段抽取}{12}{subsection.8.6}%
+\contentsline {subsection}{\numberline {8.7}第五层：窗口评分与惩罚机制}{12}{subsection.8.7}%
+\contentsline {subsection}{\numberline {8.8}这一步教会我们什么}{12}{subsection.8.8}%
+\contentsline {section}{\numberline {9}核心技术六：Diff 差异比对}{13}{section.9}%
+\contentsline {subsection}{\numberline {9.1}为什么要做 Diff}{13}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}技术原理是什么}{13}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}为什么输出成 HTML}{13}{subsection.9.3}%
+\contentsline {section}{\numberline {10}核心技术七：本地 LLM 解释层}{13}{section.10}%
+\contentsline {subsection}{\numberline {10.1}为什么检索之后还要 LLM}{13}{subsection.10.1}%
+\contentsline {subsection}{\numberline {10.2}项目如何调用大模型}{14}{subsection.10.2}%
+\contentsline {subsection}{\numberline {10.3}Prompt 设计有什么特点}{14}{subsection.10.3}%
+\contentsline {subsection}{\numberline {10.4}为什么强调“本地”}{14}{subsection.10.4}%
+\contentsline {section}{\numberline {11}核心技术八：Web 前端与交互封装}{15}{section.11}%
+\contentsline {subsection}{\numberline {11.1}为什么还需要 Gradio}{15}{subsection.11.1}%
+\contentsline {subsection}{\numberline {11.2}这不是“花哨界面”，而是产品化}{15}{subsection.11.2}%
+\contentsline {subsection}{\numberline {11.3}一个值得注意的工程细节}{15}{subsection.11.3}%
+\contentsline {section}{\numberline {12}核心技术九：鲁棒性与工程质量}{15}{section.12}%
+\contentsline {subsection}{\numberline {12.1}懒加载与资源控制}{15}{subsection.12.1}%
+\contentsline {subsection}{\numberline {12.2}持久化索引}{15}{subsection.12.2}%
+\contentsline {subsection}{\numberline {12.3}错误恢复}{15}{subsection.12.3}%
+\contentsline {subsection}{\numberline {12.4}测试}{16}{subsection.12.4}%
+\contentsline {section}{\numberline {13}从头到尾走一遍完整样例}{16}{section.13}%
+\contentsline {subsection}{\numberline {13.1}样例输入}{16}{subsection.13.1}%
+\contentsline {subsection}{\numberline {13.2}系统内部会发生什么}{16}{subsection.13.2}%
+\contentsline {subsection}{\numberline {13.3}这一步最想让你看懂什么}{17}{subsection.13.3}%
+\contentsline {section}{\numberline {14}这套技术方案为什么成立}{17}{section.14}%
+\contentsline {subsection}{\numberline {14.1}它抓住了任务本质}{17}{subsection.14.1}%
+\contentsline {subsection}{\numberline {14.2}它没有迷信大模型}{17}{subsection.14.2}%
+\contentsline {subsection}{\numberline {14.3}它适合教学}{17}{subsection.14.3}%
+\contentsline {section}{\numberline {15}局限与改进方向}{18}{section.15}%
+\contentsline {section}{\numberline {16}给大一新生的最终总结}{18}{section.16}%
