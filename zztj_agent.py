@@ -74,12 +74,14 @@ EVENT_TERMS = (
     "伐", "攻", "弒", "弑", "盟", "立", "借救", "救周", "臨周", "临周",
     "胡服", "騎射", "骑射", "晉陽", "晋阳", "雍氏", "河西", "徐州",
     "相王", "稱王", "称王", "高都", "從約", "从约", "三版", "易子而食",
+    "封禪", "封禅", "泰山", "嶧山", "峄山",
 )
 ROLE_WORDS = (
     "大夫", "卿", "公子", "太子", "天子", "王后", "夫人", "將軍", "将军",
     "國君", "国君", "使者", "君臣", "子孫", "子孙", "後", "后", "之君",
+    "儒生", "博士",
 )
-NON_NAME_CHARS = set("之而其以於于為为乃且皆亦則则使令命告曰興兴師求患攻伐立賜赐與与會会盟入出來来去請请問问言臨临國国兵君王公侯年")
+NON_NAME_CHARS = set("之而其以於于為为乃且皆亦則则使令命告曰興兴師求患攻伐立賜赐與与會会盟入出來来去請请問问言臨临國国兵君王公侯年集")
 PLACE_SUFFIX_CHARS = set("陽阴陵邑里臺台城關陘阪水河澤山原谷津渡池鄉野亭陌鄙塞道")
 KNOWN_PLACES = {
     "晉陽", "晋陽", "晋阳", "安邑", "平陽", "平阳", "邯鄲", "邯郸", "大梁",
@@ -481,6 +483,7 @@ def _extract_passage_features(text: str):
             rf'(?:東|西)?周[\u4e00-\u9fff]{{1,2}}王',
             rf'[{STATE_CHARS}][\u4e00-\u9fff]{{1,2}}(?:王|公|侯|君)',
             rf'[\u4e00-\u9fff]{{1,2}}(?:王|公|侯|君)(?=(?:[{YEAR_CHARS}]|\d)+年)',
+            r'(?:秦)?始皇(?:帝)?',
         ]
         for pattern in ruler_patterns:
             rulers.extend(re.findall(pattern, normalized))
@@ -509,6 +512,8 @@ def _extract_passage_features(text: str):
                 if len(term) < 2:
                     continue
                 if _is_place_like(term):
+                    continue
+                if term[0] in NON_NAME_CHARS:
                     continue
                 if any(role in term for role in ROLE_WORDS):
                     continue
@@ -970,6 +975,8 @@ def _load_corpus_cache(expected_count: int):
         return None
     if payload.get("collection_count") != expected_count:
         return None
+    if payload.get("opencc_enabled") != (OpenCC is not None):
+        return None
 
     entries = payload.get("entries")
     if not isinstance(entries, list):
@@ -982,6 +989,7 @@ def _write_corpus_cache(entries, collection_count: int):
     payload = {
         "collection_name": COLLECTION_NAME,
         "collection_count": collection_count,
+        "opencc_enabled": OpenCC is not None,
         "entries": entries,
     }
     try:

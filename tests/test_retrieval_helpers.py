@@ -134,6 +134,17 @@ def test_extract_query_features_recognizes_alias_person_and_skips_place_name():
     assert "晉陽" not in features["names"]
 
 
+def test_extract_query_features_handles_qin_shihuang_fengshan_case():
+    features = _extract_query_features(
+        "二十八年始皇东行郡、县，上邹峄山，立石颂功业。于是召集鲁儒生七十人，至泰山下，议封禅。"
+    )
+
+    assert "始皇" in features["rulers"] or "秦始皇" in features["rulers"]
+    assert "封禅" in features["events"] or "封禪" in features["events"]
+    assert "鲁儒生" not in features["names"]
+    assert "集鲁儒" not in features["names"]
+
+
 def test_score_text_window_handles_aliases_and_rephrased_classical_wording():
     query = "知伯帥韓、魏而攻趙，決晉水以灌晉陽，城不浸者三版。"
     query_features = _extract_query_features(query)
